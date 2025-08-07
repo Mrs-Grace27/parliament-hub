@@ -1,11 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-
-export interface User {
-  id: string;
-  email: string;
-  name: string;
-  role: 'member' | 'speaker' | 'admin' | 'listener';
-}
+import { authApi, User } from '@/services/api';
+import { socketService } from '@/services/socket';
 
 interface AuthContextType {
   user: User | null;
@@ -34,34 +29,39 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    const token = localStorage.getItem('parliament_token');
-    if (token) {
-      const mockUser: User = {
-        id: '1',
-        email: 'demo@parliament.gov',
-        name: 'Demo User',
-        role: 'speaker'
-      };
-      setUser(mockUser);
-    }
-    setIsLoading(false);
+    const initializeAuth = async () => {
+      const token = localStorage.getItem('parliament_token');
+      if (token) {
+        try {
+          const response = await authApi.getCurrentUser();
+          setUser(response.user);
+          
+          // Connect to socket with authenticated user
+          socketService.connect(response.user.id);
+        } catch (error) {
+          console.error('Failed to validate token:', error);
+          localStorage.removeItem('parliament_token');
+        }
+      }
+      setIsLoading(false);
+    };
+
+    initializeAuth();
   }, []);
 
   const login = async (email: string, password: string) => {
     setIsLoading(true);
     try {
-      const mockUser: User = {
-        id: '1',
-        email,
-        name: email.split('@')[0],
-        role: email.includes('speaker') ? 'speaker' : 'member'
-      };
+      const response = await authApi.login(email, password);
       
-      localStorage.setItem('parliament_token', 'mock_token');
-      setUser(mockUser);
-    } catch (error) {
+      localStorage.setItem('parliament_token', response.token);
+      setUser(response.user);
+      
+      // Connect to socket after successful login
+      socketService.connect(response.user.id);
+    } catch (error: any) {
       console.error('Login failed:', error);
-      throw error;
+      throw new Error(error.response?.data?.message || 'Login failed');
     } finally {
       setIsLoading(false);
     }
@@ -70,26 +70,33 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const register = async (name: string, email: string, password: string, role: string) => {
     setIsLoading(true);
     try {
-      const mockUser: User = {
-        id: Date.now().toString(),
-        email,
-        name,
-        role: role as User['role']
-      };
+      const response = await authApi.register(name, email, password, role);
       
-      localStorage.setItem('parliament_token', 'mock_token');
-      setUser(mockUser);
-    } catch (error) {
+      localStorage.setItem('parliament_token', response.token);
+      setUser(response.user);
+      
+      // Connect to socket after successful registration
+      socketService.connect(response.user.id);
+    } catch (error: any) {
       console.error('Registration failed:', error);
-      throw error;
+      throw new Error(error.response?.data?.message || 'Registration failed');
     } finally {
       setIsLoading(false);
     }
   };
 
-  const logout = () => {
-    localStorage.removeItem('parliament_token');
-    setUser(null);
+  const logout = async () => {
+    try {
+      await authApi.logout();
+    } catch (error) {
+      console.error('Logout API call failed:', error);
+    } finally {
+      localStorage.removeItem('parliament_token');
+      setUser(null);
+      
+      // Disconnect socket on logout
+      socketService.disconnect();
+    }
   };
 
   const value = {
